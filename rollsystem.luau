@@ -1,776 +1,352 @@
--- THE CODE BELOW WAS CODED BY BLACKTIDE STUDIOS
+-- The code below was made by BlackTide Studios
 
--- THIS IS A ROLL SYSTEM FOR MY GAME "FART RNG"
+-- This is a fly systeme for admins on my One Piece game
 
--- I EXPLAINED THE MAJORITY OF THE SCRIPT
+-- I explained the majority of the script
 
--- YOU HAVE THE VIDEO SHOWCASING THE SYSTEM IN THE FILES OF THE GITHUB
-
-
-
-
--- VARIABLES
-
-local RS = game:GetService("ReplicatedStorage")
-local SSS = game:GetService("ServerScriptService")
 local Players = game:GetService("Players")
-local RollEvent = RS:WaitForChild("Remotes"):WaitForChild("RollEvent")
-local FartDataModule = require(RS:WaitForChild("FartData"))
-local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
 
-local InventoryDataStore = DataStoreService:GetDataStore("InventoryCountSave")
-local CutscenesModule = require(script:WaitForChild("CutscenesModule"))
-local FartCountDataStore = DataStoreService:GetDataStore("FartCountSave")
+local KeyCode = Enum.KeyCode.Space -- Key used to toggle flying
+local WindSoundEnabled = true -- Enables/Disables wind SFX
 
-local Config = require(RS.Config)
-local dataManager = require(SSS:WaitForChild("Modules"):WaitForChild("DataManager"))
-local FartHandler = require(SSS:WaitForChild("FartHandler"))
+local player = Players.LocalPlayer
+local Character = player.Character or player.CharacterAdded:Wait()
+local Humanoid = Character:FindFirstChild("Humanoid") or Character:WaitForChild("Humanoid")
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Camera = workspace.Camera
 
-local MAX_RETRIES = 1
-local RETRY_DELAY = 5
+-- Clone forces used for flying
+local BodyVelocity = script:WaitForChild("BodyVelocity"):Clone()
+local BodyGyro = script:WaitForChild("BodyGyro"):Clone()
+BodyVelocity.Parent = Character
+BodyGyro.Parent = Character
 
-local isOnBlackFrame = Config.IsOnBlackFrame
+-- Idle and flying animations
+local Hover = script.Idle
+local Fly = script.Idle
 
-local PlaySoundEvent = RS:WaitForChild("Remotes"):WaitForChild("PlaySound")
+local v10 = Humanoid.Animator:LoadAnimation(Hover)
+local v11 = Humanoid.Animator:LoadAnimation(Fly)
 
--- =1 TO THE GLOBAL FARTS OF THE ROLLED FART
-
-local function incrementFartCount(fartName)
-	local success, currentCount = pcall(function()
-		return FartCountDataStore:GetAsync(fartName)
-	end)
-
-	if success then
-		currentCount = currentCount or 0
-		currentCount = currentCount + 1
-
-		local success, errorMsg = pcall(function()
-			return FartCountDataStore:SetAsync(fartName, currentCount)
-		end)
-
-		if not success then
-		end
-
-		return currentCount
-	else
-		return nil
-	end
+-- Wind sound played while flying/moving
+local Sound1 = Instance.new("Sound", HumanoidRootPart)
+Sound1.SoundId = "rbxassetid://3308152153"
+Sound1.Name = "Sound1"
+if WindSoundEnabled == false then
+	Sound1.Volume = 0
 end
 
--- -1 TO THE GLOBAL FARTS OF THE DELETED FART
+local Flymoving = script:WaitForChild("Flymoving")
+local boost = false -- Shift boost active
+local Flying = false -- Flying state
+local lastTime = tick() -- Used for double-tap detection
+local deb = false
+local cdb = false -- Cooldown for boost
 
-local function decrementFartCount(fartName)
-	local success, currentCount = pcall(function()
-		return FartCountDataStore:GetAsync(fartName)
-	end)
+-- Directional animations
+local ranim = Humanoid:LoadAnimation(script.Right)
+local lanim = Humanoid:LoadAnimation(script.Left)
+local wanim = Humanoid:LoadAnimation(script.Front)
+local aanim = Humanoid:LoadAnimation(script.Back)
+local forwardLeft = Humanoid:LoadAnimation(script:WaitForChild("ForwardLeft"))
+local forwardRight = Humanoid:LoadAnimation(script:WaitForChild("ForwardRight"))
+local backLeft = Humanoid:LoadAnimation(script:WaitForChild("BackLeft"))
+local backRight = Humanoid:LoadAnimation(script:WaitForChild("BackRight"))
 
-	if success then
-		currentCount = currentCount or 0
-		if currentCount > 0 then
-			currentCount = currentCount - 1
+-- Boost animations
+local bst = Humanoid:LoadAnimation(script.BOOST)
+local bstStart = Humanoid:LoadAnimation(script.BOOSTStart)
+
+-- Converts movement direction relative to camera
+local function getMoveVector()
+	if Humanoid.MoveDirection == Vector3.new(0, 0, 0) then
+		return Humanoid.MoveDirection
+	end
+	local flatLook = Vector3.new(Camera.CFrame.lookVector.x, 0, Camera.CFrame.lookVector.z)
+	local transformed = (Camera.CFrame * CFrame.new((CFrame.new(Camera.CFrame.p, Camera.CFrame.p + flatLook):VectorToObjectSpace(Humanoid.MoveDirection)))).p - Camera.CFrame.p
+	if transformed == Vector3.new() then
+		return transformed
+	end
+	return transformed.Unit
+end
+
+-- Stops all directional flying animations
+local function stopAllDirectionAnims()
+	ranim:Stop()
+	lanim:Stop()
+	wanim:Stop()
+	aanim:Stop()
+	forwardLeft:Stop()
+	forwardRight:Stop()
+	backLeft:Stop()
+	backRight:Stop()
+end
+
+-- Plays correct flying directional animation based on WASD
+local function playDirectionalAnim()
+	if not Flying then return end
+
+	local w = UIS:IsKeyDown(Enum.KeyCode.W)
+	local a = UIS:IsKeyDown(Enum.KeyCode.A)
+	local s = UIS:IsKeyDown(Enum.KeyCode.S)
+	local d = UIS:IsKeyDown(Enum.KeyCode.D)
+
+	stopAllDirectionAnims()
+
+	if w and a then
+		forwardLeft:Play()
+	elseif w and d then
+		forwardRight:Play()
+	elseif s and a then
+		backLeft:Play()
+	elseif s and d then
+		backRight:Play()
+	elseif w then
+		wanim:Play()
+	elseif s then
+		aanim:Play()
+	elseif d then
+		ranim:Play()
+	elseif a then
+		lanim:Play()
+	end
+
+	v10:Stop()
+	v11:Stop()
+end
+
+-- MAIN flying update loop
+RunService.RenderStepped:Connect(function()
+	if script.Parent ~= Character then return end
+
+	if Flying then
+		Humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+		BodyGyro.CFrame = Camera.CFrame -- Always face camera direction
+
+		-- Detect if player is moving
+		if getMoveVector() == Vector3.new(0, 0, 0) then
+			Flymoving.Value = false
 		else
-			currentCount = 0
+			Flymoving.Value = true
 		end
 
-		local success, errorMsg = pcall(function()
-			return FartCountDataStore:SetAsync(fartName, currentCount)
-		end)
-
-		if not success then
-			warn("Failed to save fart count: " .. errorMsg)
-		end
-
-		warn(fartName, currentCount)
-		return currentCount
-	else
-		warn("Failed to save fart count: " .. currentCount)
-		return nil
-	end
-end
-
--- THIS FUNCTION IS CHOOSING THE FART THAT UR GOING TO GET
-
-local function ChooseFart(farts, player)
-	if #farts == 0 then
-		return nil
-	end
-
-	local luck = player:GetAttribute("Luck") or 1
-	local totalEntries = 0
-	local adjustedEntries = {}
-	local validFarts = {}
-
-	local currentTime = game:GetService("Lighting").ClockTime
-	local isDayTime = (currentTime >= 6 and currentTime < 18) and "Day" or "Night"
-	local selectedWeather = RS:WaitForChild("SelectedWeather"):WaitForChild("Name").Value
-
-	for _, fart in pairs(farts) do
-		local meetsTimeRequirement = not fart.Time or fart.Time == isDayTime
-		local meetsWeatherRequirement = not fart.Weather or fart.Weather == selectedWeather
-
-		if fart.Chance and meetsTimeRequirement and meetsWeatherRequirement then
-			local adjustedChance = fart.Chance ^ (1 / luck)
-			if adjustedChance then
-				local entryValue = 1 / adjustedChance
-				table.insert(adjustedEntries, entryValue)
-				table.insert(validFarts, fart)
-				totalEntries = totalEntries + entryValue
-			end
-		end
-	end
-
-	if totalEntries == 0 then
-		return nil
-	end
-
-	local randomEntry = math.random() * totalEntries
-	local cumulativeEntry = 0
-
-	for index, entryValue in pairs(adjustedEntries) do
-		cumulativeEntry += entryValue
-		if randomEntry <= cumulativeEntry then
-			local SelectedFart = validFarts[index]
-			if SelectedFart then
-				player:SetAttribute("SelectedFart", SelectedFart.Name)
-				player:SetAttribute("IsMutated", SelectedFart.FartMutated)
-				return SelectedFart.Name, SelectedFart.Chance, SelectedFart.TextColor, SelectedFart.TextFont, if SelectedFart.Cutscene then SelectedFart.Cutscene else nil, SelectedFart.FartMutated, SelectedFart.FartMutatedColor, SelectedFart.FartMutatedFont, SelectedFart.FartMutatedName, SelectedFart.RegularName
-			end
-		end
-	end
-
-	return nil
-end
-
--- I MADE THIS FUNCTION BECAUSE SOMETIMES THE PROFILESTORE WAS WIPING THE PLAYER
-
-local function retryOperation(operation, ...)
-	local attempts = 0
-	while attempts < MAX_RETRIES do
-		local success, result = pcall(operation, ...)
-		if success then
-			return true, result
-		else
-			warn(result)
-			attempts = attempts + 1
-			wait(RETRY_DELAY)
-		end
-	end
-end
-
--- THIS FUNCTION SAVES THE FARTS USING PROFILESTORESERVICE
-
-local function saveFarts(player)
-	local fartsFolder = player:FindFirstChild("FartsFolder")
-	if not fartsFolder then
-		warn("FartsFolder not found for player " .. player.Name)
-		return
-	end
-
-	local farts = fartsFolder:GetChildren()
-	local fartNames = {}
-
-	for _, fart in ipairs(farts) do
-		if fart:IsA("StringValue") then
-			table.insert(fartNames, fart.Name)
-		end
-	end
-
-	local success, errorMsg = retryOperation(function()
-		InventoryDataStore:SetAsync(player.UserId, fartNames)
-	end)
-end
-
--- THIS FUNCTION LOADS THE FARTS FROM PROFILESTORESERVICE
-
-local function loadFarts(player)
-	local success, fartNames = retryOperation(function()
-		return InventoryDataStore:GetAsync(player.UserId)
-	end)
-
-	if success and fartNames then
-		local fartsFolder = player:FindFirstChild("FartsFolder")
-		if not fartsFolder then
-			fartsFolder = Instance.new("Folder", player)
-			fartsFolder.Name = "FartsFolder"
-		end
-
-		for _, fartName in ipairs(fartNames) do
-				local stringValue = Instance.new("StringValue")
-				stringValue.Value = fartName
-				stringValue.Name = fartName
-				stringValue.Parent = fartsFolder
-			end
-		end
-		local FartDataEvent = RS:WaitForChild("Remotes"):WaitForChild("FartData")
-		FartDataEvent:FireClient(player, fartNames)
-	end
-
--- THIS FUNCTION UPDATE THE ROLLS FROM LEADERBOARD
-
-local function updateRolls(player)
-	local profile = dataManager.Profiles[player]
-
-	profile.Data.Rolls = (profile.Data.Rolls or 0) + 1
-	player.leaderstats.Rolls.Value = profile.Data.Rolls
-end
-
--- THIS FUNCTION IS FOR THE MAX INVENTORY SPACE
-
-local function updateMaxRolls(player, price)
-	local profile = dataManager.Profiles[player]
-
-	profile.Data.MaxFart = (profile.Data.MaxFart or 5) + 1
-	player.MaxFart.Value = profile.Data.MaxFart
-
-	profile.Data.ExpandPrice = (profile.Data.ExpandPrice or 100) * Config.PriceIncreaseFactor
-	player.ExpandPrice.Value = profile.Data.ExpandPrice
-
-	profile.Data.Cash = (profile.Data.Cash or 1000)
-	player.Cash.Value = profile.Data.Cash - price
-end
-
--- THIS FUNCTION IS FOR THE CHAT WARNING WHEN SOMEONE GETS A RARE FART
-
-local function DetermineColor(chance)
-	if chance <= 4999 then
-		return Color3.fromRGB(160, 32, 240)
-	elseif chance <= 49999 then
-		return Color3.fromRGB(255, 255, 0)
-	else
-		return Color3.fromRGB(255, 165, 0)
-	end
-end
-
--- THIS FUNCTION SHOWS RANDOM FARTS WHEN ROLLING
-
-local function showRandomFarts(player, duration, label, rnglabel, startRNGPos, endRNGPos, StartPos, EndPos)
-	local farts = FartDataModule.Farts
-
-	local shuffledFarts = {}
-	for _, fart in pairs(farts) do
-		table.insert(shuffledFarts, fart)
-	end
-
-	for i = #shuffledFarts, 2, -1 do
-		local random = math.random(i)
-		shuffledFarts[i], shuffledFarts[random] = shuffledFarts[random], shuffledFarts[i]
-	end
-
-	local fartsToShow = math.min(#shuffledFarts, 7)
-	for i = 1, fartsToShow do
-		local fart = shuffledFarts[i]
-		label.Text = fart.Name
-		label.TextColor3 = fart.TextColor
-		label.Font = fart.TextFont
-		rnglabel.Text = "1 in " .. tostring(fart.Chance)
-
-		label.Position = StartPos
-		rnglabel.Position = startRNGPos
-
-		local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-		local tween = game:GetService("TweenService"):Create(label, tweenInfo, {Position = EndPos})
-		tween:Play()
-
-		local rngtweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-		local rngtween = game:GetService("TweenService"):Create(rnglabel, rngtweenInfo, {Position = endRNGPos})
-		rngtween:Play()
-
-		local PlaySoundEvent = RS.Remotes.PlaySound
-		PlaySoundEvent:FireClient(player, "Tick")
-
-		wait(duration)
-	end
-end
-
--- THIS FUNCTION SHOWS THE CONFIRM SKIP FRAME
-
-function ShowSkipFrame(player, ActualFrame, cdFrame, frame, skipButton, cd)
-	ActualFrame.Visible = false
-	player:SetAttribute("OnCooldown", true)
-
-	cdFrame.Visible = true
-	cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-
-	ActualFrame.Visible = false
-	frame.Visible = false
-
-	task.wait(cd)
-
-	cdFrame.Visible = false
-	cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-	player:SetAttribute("OnCooldown", false)
-
-	skipButton.Active = true
-end
-
--- THIS ONSERVEREVENT HAPPENS WHEN U PRESS THE ROLL BUTTON
-
-RollEvent.OnServerEvent:Connect(function(player)
-	if player:GetAttribute("OnCooldown") then
-		return
-	end
-
-	local displayDuration
-	if player:GetAttribute("Quick") then
-		displayDuration = Config.QuickDisplayDuration
-	else
-		displayDuration = Config.NormalDisplayDuration	
-	end
-
-	local startPosition = UDim2.new(0.5, 0, 0.5, 0)
-	local startRngPosition = UDim2.new(0.5, 0, 0.44, 0)
-	local endRNGPosition = UDim2.new(0.5, 0, 0.5, 0)
-	local endPosition = UDim2.new(0.5, 0, 0.44, 0)
-
-	player:SetAttribute("OnCooldown", true)
-
-	local fartname, fartchance, farttextcolor, farttextfont, hasCutscene, ismutated, mutatedcolor, mutatedfont, mutatedtext, regularname = ChooseFart(FartDataModule.Farts, player)
-
-	player:SetAttribute("FartName", fartname)
-
-	local cd = player:GetAttribute("RollCooldown")
-
-	if fartname and fartchance and farttextcolor and farttextfont then
-		local playerGui = player:WaitForChild("PlayerGui")
-		local frame = playerGui:WaitForChild("RollUI"):WaitForChild("ChooseFrame")
-		if frame.Visible then return end
-		frame.Visible = false
-		local skipButton = frame:WaitForChild("SkipButton")
-		local equipButton = frame:WaitForChild("EquipButton")
-		local obtaimentLabel = frame:WaitForChild("ObtainmentLabel")
-		local RNGlabel = frame.RNGlabel
-		local cdFrame = frame.Parent.RollButton.CooldownFrame
-		local SkipWarning = frame.Parent.SkipWarningFrame
-		local mutationLabel = frame.MutationLabel
-
-		mutationLabel.Visible = false
-
-		local blackScreenFrame = playerGui.RollUI.BlackFrame
-		local vignette: ImageLabel = blackScreenFrame.vignette
-		local star = blackScreenFrame.Star 
-
-		local server = RS.Remotes.Messages.Server
-		local global = RS.Remotes.Messages.Global
-
-		updateRolls(player)
-
-		if fartchance >= isOnBlackFrame then
-
-			if hasCutscene ~= nil then
-
-				frame.Visible = true
-				equipButton.Visible = false
-				skipButton.Visible = false
-
-				showRandomFarts(player, displayDuration, obtaimentLabel, RNGlabel, startRngPosition, startPosition, endPosition)
-
-				task.wait(displayDuration)
-
-				CutscenesModule.PlayCutscene(player, hasCutscene, farttextcolor, blackScreenFrame, vignette, star)
-
-				task.wait(3.5)
-
-				blackScreenFrame.Visible = false
-				equipButton.Visible = true
-				skipButton.Visible = true
-
-				PlaySoundEvent:FireClient(player, "BoomEnd")
-				local CamShakeEvent = RS.Remotes.CamShakeEvent
-				CamShakeEvent:FireClient(player)
-
-				star.Rotation = 0
-				star.Size = UDim2.new(0,0,0,0)
-			else
-				frame.Visible = true
-				equipButton.Visible = false
-				skipButton.Visible = false
-
-				showRandomFarts(player, displayDuration, obtaimentLabel, RNGlabel, startRngPosition, startPosition, endPosition)
-
-				task.wait(displayDuration)
-				blackScreenFrame.Visible = true
-
-				PlaySoundEvent:FireClient(player, "Boom")
-
-				vignette.ImageTransparency = 1
-				vignette.ImageColor3 = farttextcolor
-
-				star.ImageColor3 = farttextcolor
-				star.Visible = true
-				star.ImageTransparency = 1
-
-				star:TweenSize(UDim2.new(0.5, 0, 0.5, 0))
-				game.TweenService:Create(vignette, TweenInfo.new(3.5), {ImageTransparency = 0.8}):Play()
-				game.TweenService:Create(star, TweenInfo.new(3.5), {Rotation = 1580, ImageTransparency = 0}):Play()
-
-				task.wait(3.5)
-
-				blackScreenFrame.Visible = false
-				equipButton.Visible = true
-				skipButton.Visible = true
-
-
-				PlaySoundEvent:FireClient(player, "BoomEnd")
-				local CamShakeEvent = RS.Remotes.CamShakeEvent
-				CamShakeEvent:FireClient(player)
-
-				star.Rotation = 0
-				star.Size = UDim2.new(0,0,0,0)
-			end
-
-			local autoEquips = player.AutoEquip.Value
-
-      -- THIS CODE IS FOR AUTOEQUIP IF THE VALUE IS 10 THEN THE FARTS THAT HAVE A HIGHER RARITY THAN 10 ARE GONNA AUTOMATICALY EQUIP
-
-			if autoEquips > 0 then
-				if fartchance >= autoEquips then
-					local message
-					local color = DetermineColor(fartchance)
-					if fartchance >= Config.GlobalMessageThreshold then
-						message = string.format(Config.Messages.GlobalFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-						global:FireAllClients(message, color)
-					else
-						if fartchance >= 1000 then
-							message = string.format(Config.Messages.ServerFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-							server:FireAllClients(message, color)
-						else
-							return 
-						end
-					end
-
-					equipButton.Active = false
-					FartHandler.UnequipAll(player, player.Character)
-
-					if fartname ~= nil then
-						FartHandler.EquipFart(player, player.Character)
-					end
-
-					obtaimentLabel.Text = ""
-					RNGlabel.Text = ""
-
-					player:SetAttribute("OnCooldown", true)
-
-					cdFrame.Visible = true
-					cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-
-					frame.Visible = false
-
-					task.delay(0.2, function()
-						if player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder") then
-							local fart = player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder")
-							local Remotes = RS:WaitForChild("Remotes")
-							local StoreEvent = Remotes:WaitForChild("Store")
-							local MAX_FART = player:FindFirstChild("MaxFart") and player.MaxFart.Value
-							local FartFolder = player:FindFirstChild("FartsFolder")
-
-							StoreEvent:FireClient(player, fart.Name)
-
-							if #FartFolder:GetChildren() >= MAX_FART then return end
-							local stringValue = Instance.new("StringValue", player.FartsFolder)
-							stringValue.Value = fart.Name
-							stringValue.Name = fart.Name
-						end
-					end)
-
-					task.wait(cd)
-
-					cdFrame.Visible = false
-					cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-					player:SetAttribute("OnCooldown", false)
-
-					fartname = nil
-					player:SetAttribute("SelectedFart", nil)
-
-					equipButton.Active = true
-
-				elseif fartchance < autoEquips then
-					local message
-					local color = DetermineColor(fartchance)
-					if fartchance >= Config.GlobalMessageThreshold then
-						message = string.format(Config.Messages.GlobalFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-						global:FireAllClients(message, color)
-					else
-						if fartchance >= 1000 then
-							message = string.format(Config.Messages.ServerFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-							server:FireAllClients(message, color)
-						else
-							return 
-						end
-					end
-
-					SkipWarning.Visible = false
-
-					cdFrame.Visible = true
-					cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-					frame.Visible = false
-
-					task.wait(cd)
-
-					cdFrame.Visible = false
-					cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-					player:SetAttribute("OnCooldown", false)
-
-					fartname = nil
-					player:SetAttribute("SelectedFart", nil)
-
-					return
-				end
-			end
-		else
-			frame.Visible = true
-			equipButton.Visible = false
-			skipButton.Visible = false
-
-			showRandomFarts(player, displayDuration, obtaimentLabel, RNGlabel, startRngPosition, startPosition, endPosition)
-
-			task.wait(displayDuration)
-
-			local autoEquips = player.AutoEquip.Value
-
-			if autoEquips > 0 then
-				if fartchance >= autoEquips then
-					local message
-					local color = DetermineColor(fartchance)
-					if fartchance >= Config.GlobalMessageThreshold then
-						message = string.format(Config.Messages.GlobalFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-						global:FireAllClients(message, color)
-					else
-						if fartchance >= 1000 then
-							message = string.format(Config.Messages.ServerFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-							server:FireAllClients(message, color)
-						else
-							return 
-						end
-					end
-
-					equipButton.Active = false
-					FartHandler.UnequipAll(player, player.Character)
-
-					if fartname ~= nil then
-						FartHandler.EquipFart(player, player.Character)
-					end
-
-					obtaimentLabel.Text = ""
-					RNGlabel.Text = ""
-
-					player:SetAttribute("OnCooldown", true)
-
-					cdFrame.Visible = true
-					cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-
-					frame.Visible = false
-
-					task.delay(0.2, function()
-						if player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder") then
-							local fart = player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder")
-							local Remotes = RS:WaitForChild("Remotes")
-							local StoreEvent = Remotes:WaitForChild("Store")
-							local MAX_FART = player:FindFirstChild("MaxFart") and player.MaxFart.Value
-							local FartFolder = player:FindFirstChild("FartsFolder")
-
-							StoreEvent:FireClient(player, fart.Name)
-
-							if #FartFolder:GetChildren() >= MAX_FART then return end
-							local stringValue = Instance.new("StringValue", player.FartsFolder)
-							stringValue.Value = fart.Name
-							stringValue.Name = fart.Name
-						end
-					end)
-
-					task.wait(cd)
-
-          -- THIS IS THE COOLDOWNFRAME THAT SHOWS UP ON THE ROLL BUTTON
-
-					cdFrame.Visible = false
-					cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-					player:SetAttribute("OnCooldown", false)
-
-					fartname = nil
-					player:SetAttribute("SelectedFart", nil)
-
-					equipButton.Active = true
-
-          -- THIS IS THE CHAT WARNING WHEN SOMEONE ROLLS A RARE FART
-
-				elseif fartchance < autoEquips then
-					local message
-					local color = DetermineColor(fartchance)
-					if fartchance >= Config.GlobalMessageThreshold then
-						message = string.format(Config.Messages.GlobalFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-						global:FireAllClients(message, color)
-					else
-						if fartchance >= 1000 then
-							message = string.format(Config.Messages.ServerFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-							server:FireAllClients(message, color)
-						else
-							return 
-						end
-					end
-
-					SkipWarning.Visible = false
-
-					cdFrame.Visible = true
-					cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-					frame.Visible = false
-
-					task.wait(cd)
-
-					cdFrame.Visible = false
-					cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-					player:SetAttribute("OnCooldown", false)
-
-					fartname = nil
-					player:SetAttribute("SelectedFart", nil)
-
-					return
-				end
-			end
-
-			equipButton.Visible = true
-			skipButton.Visible = true
-		end
-
-		obtaimentLabel.Text = fartname
-		obtaimentLabel.TextColor3 = farttextcolor
-		obtaimentLabel.Font = farttextfont
-
-		if ismutated then
-			mutationLabel.Font = mutatedfont
-			mutationLabel.Text = tostring(mutatedtext)
-			mutationLabel.TextColor3 = mutatedcolor
-			obtaimentLabel.Text = regularname
-			mutationLabel.Visible = true
-		end
-
-		RNGlabel.Text = "1 in " .. tostring(fartchance)
-
-		skipButton.MouseButton1Click:Connect(function()
-			local Yes = SkipWarning.Yes
-			SkipWarning.Visible = true
-			Yes.MouseButton1Click:Connect(function()
-				ShowSkipFrame(player, SkipWarning, cdFrame, frame, skipButton, cd)
-			end)
-			local No = SkipWarning.No
-			No.MouseButton1Click:Connect(function()
-				SkipWarning.Visible = false
-				frame.Visible = true
-			end)
-		end)
-
-		equipButton.MouseButton1Click:Once(function()
-			SkipWarning.Visible = false
-			equipButton.Active = false
-
-			FartHandler.UnequipAll(player, player.Character)
-
-			if fartname ~= nil then
-				FartHandler.EquipFart(player, player.Character)
-			end
-
-			obtaimentLabel.Text = ""
-			RNGlabel.Text = ""
-
-			player:SetAttribute("OnCooldown", true)
-
-			incrementFartCount(fartname)
-
-			cdFrame.Visible = true
-			cdFrame:TweenSize(UDim2.new(0,0,1,0), "Out", "Linear", cd, true)
-
-			for _, fartOwned in pairs(player:FindFirstChild("FartsOwned"):GetChildren()) do
-				if fartname == fartOwned.Name then
-					fartOwned.Value = true
-				end
-			end
-
-			frame.Visible = false
-
-			task.delay(0.2, function()
-				if player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder") then
-					local fart = player.Character:FindFirstChild("FART"):FindFirstChildOfClass("Folder")
-					local Remotes = RS:WaitForChild("Remotes")
-					local StoreEvent = Remotes:WaitForChild("Store")
-					local MAX_FART = player:FindFirstChild("MaxFart") and player.MaxFart.Value
-					local FartFolder = player:FindFirstChild("FartsFolder")
-					
-					StoreEvent:FireClient(player, fart.Name)
-					
-					if #FartFolder:GetChildren() >= MAX_FART then return end
-					local stringValue = Instance.new("StringValue", player.FartsFolder)
-					stringValue.Value = fart.Name
-					stringValue.Name = fart.Name
-				end
-			end)
-
-			task.wait(cd)
-
-			cdFrame.Visible = false
-			cdFrame.Size = UDim2.new(1, 0, 1, 0)
-
-			player:SetAttribute("OnCooldown", false)
-
-			fartname = nil
-			player:SetAttribute("SelectedFart", nil)
-
-			equipButton.Active = true
-		end)
-
-		local message
-		local color = DetermineColor(fartchance)
-		if fartchance >= Config.GlobalMessageThreshold then
-			message = string.format(Config.Messages.GlobalFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-			global:FireAllClients(message, color)
-		else
-			if fartchance >= 1000 then
-				message = string.format(Config.Messages.ServerFormat, player.DisplayName, player.Name, fartname , tostring(fartchance))
-				server:FireAllClients(message, color)
-			else
-				return 
-			end
-		end
-
-		player:SetAttribute("OnCooldown", false)
-		return
-	else
-		player:SetAttribute("OnCooldown", false)
-		return
+		-- Velocity changes based on boost
+		local targetVel = getMoveVector() * (boost and 250 or 49)
+		TweenService:Create(BodyVelocity, TweenInfo.new(0.3), {Velocity = targetVel}):Play()
 	end
 end)
 
--- THIS IS THE PROFILEDATASTORE TO SAVE AND LOAD FARTS
+-- Animation + camera FOV changes when flying/moving
+Flymoving.Changed:Connect(function(p1)
+	if p1 == true then
+		-- Moving
+		if boost then
+			TweenService:Create(Camera, TweenInfo.new(0.5), {FieldOfView = 200}):Play()
+		else
+			TweenService:Create(Camera, TweenInfo.new(0.5), {FieldOfView = 100}):Play()
+		end
+		v10:Stop()
+		Sound1:Play()
+		return
+	end
 
-game.Players.PlayerRemoving:Connect(saveFarts)
-game.Players.PlayerAdded:Connect(loadFarts)
+	-- Not moving
+	if p1 == false then
+		if boost then
+			TweenService:Create(Camera, TweenInfo.new(0.5), {FieldOfView = 130}):Play()
+		else
+			TweenService:Create(Camera, TweenInfo.new(0.5), {FieldOfView = 70}):Play()
+		end
+		v11:Stop()
+		Sound1:Stop()
+		v10:Play()
+	end
+end)
 
-local Remotes = RS:WaitForChild("Remotes")
-local DeleteFartDataEvent = Remotes:WaitForChild("DeleteFartData")
+-- FLY TOGGLE (double-space)
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if Flying then
+		playDirectionalAnim()
+	end
+	if gameProcessed then return end
+	if input.KeyCode ~= KeyCode then return end
 
--- THIS ONSERVEREVENT DESTROYS THE STRING AND THE TEMPLATE FROM INVENTORY
+	if deb then return end
 
-DeleteFartDataEvent.OnServerEvent:Connect(function(player, fartName)
-	local fartsFolder = player:FindFirstChild("FartsFolder")
-	if fartsFolder then
+	local now = tick()
+	local difference = now - lastTime
+	lastTime = tick()
 
-		decrementFartCount(fartName)
+	-- Double-tap space
+	if difference <= 0.5 then
+		deb = true
+		task.wait(1)
+		deb = false
 
-		local fartString = fartsFolder:FindFirstChild(fartName)
-		if fartString then
-			fartString:Destroy()
+		-- Start flying
+		if not Flying then
+			stopAllDirectionAnims()
+			v10:Stop()
+			v11:Stop()
+
+			-- Small upward impulse before flying
+			local BodyVelocity2 = Instance.new("BodyVelocity")
+			BodyVelocity2.MaxForce = Vector3.new(0, 1e8, 0)
+			BodyVelocity2.Velocity = HumanoidRootPart.CFrame.UpVector * 55
+			BodyVelocity2.Parent = HumanoidRootPart
+			game.Debris:AddItem(BodyVelocity2, 0.2)
+
+			task.delay(0.3, function()
+				Flying = true
+			end)
+
+			task.wait(0.33)
+
+			-- Enable flying physics
+			v10:Play(0.1, 1, 1)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+
+			if HumanoidRootPart:FindFirstChild("Running") then
+				HumanoidRootPart.Running.Volume = 0
+			end
+
+			Humanoid:ChangeState(6)
+			BodyVelocity.Parent = HumanoidRootPart
+			BodyGyro.Parent = HumanoidRootPart
+
+		-- Stop flying
+		else
+			stopAllDirectionAnims()
+			v10:Stop()
+			v11:Stop()
+
+			Flying = false
+			Flymoving.Value = false
+
+			-- Re-enable humanoid states
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+
+			if HumanoidRootPart:FindFirstChild("Running") then
+				HumanoidRootPart.Running.Volume = 0.65
+			end
+
+			Humanoid:ChangeState(8)
+			BodyVelocity.Parent = Character
+			BodyGyro.Parent = Character
 		end
 	end
 end)
 
-local SaveMaxFartEvent = Remotes:WaitForChild("SaveMaxFart")
+-- BOOST (LeftShift)
+local vfx
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if not Flying then return end
+	if Humanoid.MoveDirection.Magnitude == 0 then return end
+	if input.KeyCode == Enum.KeyCode.LeftShift and not cdb then
+		
+		bst:Play()
+		bstStart:Play()
+		boost = true
+		script.Boost:Play()
 
--- THIS SAVESTHEMAXFARTS IN INVENTORY
+		-- Spawn boost VFX
+		vfx = game.ReplicatedStorage.Assets.Flight:Clone()
+		vfx.Parent = HumanoidRootPart
+		vfx.CFrame = HumanoidRootPart.CFrame
 
-SaveMaxFartEvent.OnServerEvent:Connect(function(player, price)
-	if player.Cash.Value >= price then
-		updateMaxRolls(player, price)
+		local m6d = Instance.new("Motor6D")
+		m6d.Part0 = HumanoidRootPart
+		m6d.Part1 = vfx
+		m6d.Parent = vfx
+
+		-- Enable particles after delay
+		task.delay(.3,function()
+			for _,v in vfx:GetDescendants() do
+				if v:IsA("ParticleEmitter") then
+					v.Enabled = true
+				end
+			end
+		end)
 	end
+end)
+
+-- BOOST END
+UIS.InputEnded:Connect(function(input, gameProcessed)
+	if input.KeyCode == Enum.KeyCode.LeftShift then
+		bst:Stop()
+		cdb = true -- Boost cooldown
+
+		task.delay(1.5, function()
+			cdb = false
+		end)
+
+		-- Disable VFX
+		task.delay(.3,function()
+			for _,v in vfx:GetDescendants() do
+				if v:IsA("ParticleEmitter") then
+					v.Enabled = false
+				end
+			end
+		end)
+
+		game.Debris:AddItem(vfx,1)
+		boost = false
+	end
+end)
+
+-- DASH SYSTEM (Double-tap W)
+local UIS = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RE = RS:WaitForChild("DashRequest")
+
+local player = Players.LocalPlayer
+local function char()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local lastW = 0
+local window = 0.4 -- Max time between W taps
+
+UIS.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode ~= Enum.KeyCode.W then return end
+
+	local now = time()
+
+	-- Double-tap detection
+	if now - lastW <= window then
+		local c = char()
+		local hrp = c:WaitForChild("HumanoidRootPart")
+		local origin = hrp.Position
+		local look = hrp.CFrame.LookVector
+		local dir = Vector3.new(look.X, 0, look.Z).Unit
+
+		if dir.Magnitude == 0 then return end
+
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = {c}
+
+		local distance = 40
+		local result = workspace:Raycast(origin, dir * distance, params)
+
+		-- Only dash if nothing blocks the path
+		if not result then
+			RE:FireServer()
+		end
+	end
+
+	lastW = now
 end)
